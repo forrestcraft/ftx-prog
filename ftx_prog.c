@@ -41,8 +41,11 @@ static struct ftdi_context ftdi;
 static int verbose = 0;
 static int erase_eeprom = 0;
 static int ignore_crc_error = 0;
+static int set_cbus = 0;
+static int get_cbus = 0;
 static bool use_8b_strings = false;
 static const char *save_path = NULL, *restore_path = NULL;
+static char *cbus_input = NULL;
 
 /* ------------ Bit Definitions for EEPROM Decoding ------------ */
 
@@ -114,6 +117,8 @@ enum peripheral_config {
 
 enum arg_type {
   arg_help,
+  arg_set_cbus,
+  arg_get_cbus,
   arg_dump,
   arg_verbose,
   arg_save,
@@ -157,6 +162,8 @@ struct args_required_t
 const struct args_required_t req_info[] =
 {
   {arg_help, 0},
+  {arg_set_cbus, 0},
+  {arg_get_cbus, 0},
   {arg_dump, 0},
   {arg_verbose, 0},
   {arg_save, 1},
@@ -196,6 +203,8 @@ const struct args_required_t req_info[] =
 
 static const char* arg_type_strings[] = {
   "--help",
+  "--set-cbus",
+  "--get-cbus",
   "--dump",
   "--verbose",
   "--save",
@@ -289,6 +298,8 @@ static const char *d_cbus_config_strings [] = {
 
 static const char *arg_type_help[] = {
   "   				    # (show this help text)",
+  "				    # (set cbus GPIO string)",
+  "				    # (get cbus GPIO string)",
   "				    # (dump eeprom settings to stdout)",
   "				    # (show debug info and raw eeprom contents)",
   "			 <file>     # (save original eeprom contents to file)",
@@ -1059,6 +1070,19 @@ static int process_args (int argc, char *argv[], struct eeprom_fields *ee)
     case arg_help:
       show_help(stdout);
       exit(1);
+    case arg_set_cbus:
+      // Assign the argument to cbus_input
+      if (cbus_input != NULL) {
+        free(cbus_input); // Free previous memory if needed
+      }
+      cbus_input = strdup(argv[i++]); // Duplicate the string
+      if (cbus_input == NULL) {
+        perror("strdup");
+        return -1; // Handle memory allocation error
+      }
+      set_cbus = 1;
+    case arg_get_cbus:
+      get_cbus = 1;
     case arg_dump:
       break;
     case arg_ignore_crc_error:
@@ -1254,10 +1278,10 @@ int main (int argc, char *argv[])
   if (slash)
     myname = slash + 1;
 
-  printf("\n%s: version %s\n", myname, MYVERSION);
-  printf("Modified for the FT-X series by Richard Meadows\n\n");
-  printf("Based upon:\n");
-  printf("ft232r_prog: version 1.23, by Mark Lord.\n");
+//  printf("\n%s: version %s\n", myname, MYVERSION);
+//  printf("Modified for the FT-X series by Richard Meadows\n\n");
+//  printf("Based upon:\n");
+//  printf("ft232r_prog: version 1.23, by Mark Lord.\n");
   if (argc < 2) {
     show_help(stdout);
     exit(0);
@@ -1280,6 +1304,42 @@ int main (int argc, char *argv[])
     exit(ENODEV);
   }
   atexit(&do_close);
+
+  if (set_cbus) {
+    // Set bitmask from input
+
+    unsigned char bitmask;
+    int f;
+    bitmask = strtol(cbus_input, NULL, 2) | 0xf0;
+    printf("Using bitmask 0x%02x\n", bitmask );
+    f = ftdi_set_bitmode(&ftdi, bitmask, BITMODE_CBUS);
+    printf("AFTER SET\n");
+    if (f < 0)
+    {
+        printf("ERROR\n");
+        fprintf(stderr, "set_bitmode failed for 0x%x, error %d (%s)\n", bitmask, f, ftdi_get_error_string(&ftdi));
+        ftdi_usb_close(&ftdi);
+        ftdi_deinit(&ftdi);
+        exit(-1);
+    }
+    exit(0);
+  }
+
+  if (get_cbus) {
+    // read CBUS
+    int f;
+    unsigned char buf[1];
+    f = ftdi_read_pins(&ftdi, &buf[0]);
+    if (f < 0)
+    {
+        fprintf(stderr, "read_pins failed, error %d (%s)\n", f, ftdi_get_error_string(&ftdi));
+        ftdi_usb_close(&ftdi);
+        ftdi_deinit(&ftdi);
+        exit(-1);
+    }
+    printf("Read returned 0x%01x\n", buf[0] & 0xff);
+    exit(0);
+  }
 
   /* First, read the original eeprom from the device */
   (void) ee_read_and_verify(old, len);
